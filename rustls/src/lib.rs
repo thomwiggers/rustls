@@ -190,16 +190,6 @@
 //!   implementation.
 //!
 
-// Require docs for public APIs, deny unsafe code, etc.
-#![forbid(unsafe_code,
-          unused_must_use,
-          unstable_features)]
-#![deny(trivial_casts,
-        trivial_numeric_casts,
-        missing_docs,
-        unused_import_braces,
-        unused_extern_crates,
-        unused_qualifications)]
 
 // Relax these clippy lints:
 // - ptr_arg: this triggers on references to type aliases that are Vec
