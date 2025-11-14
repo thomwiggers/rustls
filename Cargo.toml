@@ -9,4 +9,5 @@ members = [
 [patch.crates-io]
 #webpki = { version = "0.21.9999", git = "https://github.com/thomwiggers/webpki.git", branch = "pq-take2" }
 webpki = { path = "../webpki" }
+oqs = { path = "../oqs-rs/oqs" }
 ring = { git = "https://github.com/thomwiggers/ring.git", branch = "longer-der" }

@@ -17,10 +17,10 @@ log = { version = "0.4.4", optional = true }
 ring = "0.16.11"
 sct = "0.6.0"
 webpki = "0.21.9999"
-oqs = { version = "*", git = "https://github.com/thomwiggers/liboqs-rust.git", branch = "dirty-thesis-benchmarks", features = ["non_portable"] }
+oqs = { path = "../../oqs-rs/oqs" }
 untrusted = "0.7"
 xmss-rs = { git = "https://github.com/thomwiggers/xmss-rs.git" }
-secsidh = { path = "../../secsidh-rs/secsidh", features = ["karatsuba"] }
+secsidh = { path = "../../secsidh/secsidh-rs/secsidh", features = ["karatsuba"] }
 csidh-rust = { git = "https://github.com/thomwiggers/csidh-rust.git", branch = "ctidh"}
 lru = { version = "0.8.1", optional = true}
 lazy_static = {version = "1.4.0", optional = true}

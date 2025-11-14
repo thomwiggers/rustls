@@ -1,16 +1,3 @@
 &[
 	SignatureScheme::NIKE_CTIDH512,
-	SignatureScheme::NIKE_CTIDH1024,
-	SignatureScheme::NIKE_CSIDH2047M1L226,
-	SignatureScheme::NIKE_CSIDH4095M27L262,
-	SignatureScheme::NIKE_CSIDH5119M46L244,
-	SignatureScheme::NIKE_CSIDH6143M59L262,
-	SignatureScheme::NIKE_CSIDH8191M78L338,
-	SignatureScheme::NIKE_CSIDH9215M85L389,
-	SignatureScheme::NIKE_CTIDH2047M1L226,
-	SignatureScheme::NIKE_CTIDH4095M27L262,
-	SignatureScheme::NIKE_CTIDH5119M46L244,
-	SignatureScheme::NIKE_CTIDH6143M59L262,
-	SignatureScheme::NIKE_CTIDH8191M78L338,
-	SignatureScheme::NIKE_CTIDH9215M85L389,
 ]

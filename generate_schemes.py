@@ -62,6 +62,9 @@ enum_builder! {
         FFDHE4096 => 0x0102,
         FFDHE6144 => 0x0103,
         FFDHE8192 => 0x0104,
+        X25519MLKEM768 => 0x11eb,
+        secp256r1MLKEM768 => 0x11ec,
+        secp384r1MLKEM1024 => 0x11ed,
 """)
     for id, (alg, oqsalg) in enumerate(kems, start=0x01fc):
         fh.write(f"        {oqsalg} => 0x{id:04x},\n")

@@ -1,15 +1,16 @@
+use crate::cipher;
+use crate::msgs::codec::{Codec, Reader};
 use crate::msgs::enums::{CipherSuite, HashAlgorithm, SignatureAlgorithm, SignatureScheme};
 use crate::msgs::enums::{NamedGroup, ProtocolVersion};
 use crate::msgs::handshake::DecomposedSignatureScheme;
 use crate::msgs::handshake::KeyExchangeAlgorithm;
 use crate::msgs::handshake::{ClientECDHParams, ServerECDHParams};
-use crate::msgs::codec::{Reader, Codec};
-use crate::cipher;
 
 use oqs;
 
 use ring;
 use std::fmt;
+use std::vec;
 
 use crate::sign::NikeImpl;
 
@@ -17,6 +18,7 @@ pub enum KexAlgorithm {
     RingAlg(&'static ring::agreement::Algorithm),
     KEM(oqs::kem::Kem),
     CSIDH(NikeImpl),
+    Hybrid(&'static ring::agreement::Algorithm, oqs::kem::Kem),
 }
 
 impl PartialEq for KexAlgorithm {
@@ -24,8 +26,11 @@ impl PartialEq for KexAlgorithm {
         match (self, other) {
             (Self::RingAlg(l0), Self::RingAlg(r0)) => l0 == r0,
             (Self::KEM(l0), Self::KEM(r0)) => l0.algorithm() == r0.algorithm(),
+            (Self::Hybrid(l0, l1), Self::Hybrid(r0, r1)) => {
+                l0 == r0 && l1.algorithm() == r1.algorithm()
+            }
             (Self::CSIDH(l0), Self::CSIDH(r0)) => l0 == r0,
-            (_, _) => false
+            (_, _) => false,
         }
     }
 }
@@ -39,13 +44,14 @@ impl std::hash::Hash for KexAlgorithm {
             KexAlgorithm::KEM(kem) => {
                 "kem".hash(state);
                 kem.algorithm().hash(state);
-            },
+            }
+            KexAlgorithm::Hybrid(_, _) => panic!("Not supported for hybrid"),
             KexAlgorithm::CSIDH(alg) => {
                 "csidh".hash(state);
                 match alg {
-                    NikeImpl::SecSidh(alg) => {alg.hash(state)},
-                    NikeImpl::CTIDH512 => { "ctidh512".hash(state) },
-                    NikeImpl::CTIDH1024 => { "ctidh1024".hash(state) },
+                    NikeImpl::SecSidh(alg) => alg.hash(state),
+                    NikeImpl::CTIDH512 => "ctidh512".hash(state),
+                    NikeImpl::CTIDH1024 => "ctidh1024".hash(state),
                 }
             }
         }
@@ -55,6 +61,10 @@ impl std::hash::Hash for KexAlgorithm {
 pub enum KexPrivateKey {
     RingKey(Option<ring::agreement::EphemeralPrivateKey>),
     KEM(oqs::kem::SecretKey),
+    Hybrid(
+        Option<ring::agreement::EphemeralPrivateKey>,
+        oqs::kem::SecretKey,
+    ),
     SECSIDH(secsidh::SecretKey),
     CTIDH512(csidh_rust::ctidh512::CSIDHPrivateKey),
     CTIDH1024(csidh_rust::ctidh1024::CSIDHPrivateKey),
@@ -65,6 +75,7 @@ impl Clone for KexPrivateKey {
         match self {
             Self::RingKey(_) => panic!("Not supported for ECDH"),
             Self::KEM(arg0) => Self::KEM(arg0.clone()),
+            Self::Hybrid(_, _) => panic!("Not supported for hybrid"),
             Self::SECSIDH(arg0) => Self::SECSIDH(arg0.clone()),
             Self::CTIDH512(arg0) => Self::CTIDH512(arg0.clone()),
             Self::CTIDH1024(arg0) => Self::CTIDH1024(arg0.clone()),
@@ -76,11 +87,13 @@ impl KexPrivateKey {
     fn take_ring_key(&mut self) -> ring::agreement::EphemeralPrivateKey {
         match self {
             Self::RingKey(key) => key.take().unwrap(),
+            Self::Hybrid(key, _) => key.take().unwrap(),
             _ => panic!("Wrong key type"),
         }
     }
     fn as_kem_key(&self) -> &oqs::kem::SecretKey {
         match self {
+            Self::Hybrid(_, key) => key,
             Self::KEM(key) => key,
             _ => panic!("Wrong key type!"),
         }
@@ -97,6 +110,7 @@ impl KexPrivateKey {
 pub enum KexPublicKey {
     RingKey(ring::agreement::PublicKey),
     KEM(oqs::kem::PublicKey),
+    Hybrid(vec::Vec<u8>),
     SECSIDH(secsidh::PublicKey),
     CTIDH512(csidh_rust::ctidh512::PublicKey),
     CTIDH1024(csidh_rust::ctidh1024::PublicKey),
@@ -116,6 +130,7 @@ impl AsRef<[u8]> for KexPublicKey {
         match self {
             Self::RingKey(key) => key.as_ref(),
             Self::KEM(key) => key.as_ref(),
+            Self::Hybrid(key) => key.as_ref(),
             Self::SECSIDH(key) => key.as_ref(),
             Self::CTIDH512(key) => key.as_ref(),
             Self::CTIDH1024(key) => key.as_ref(),
@@ -154,18 +169,17 @@ pub struct KeyExchange {
     pub pubkey: KexPublicKey,
 }
 
-
-#[cfg(feature = "lru")]
-use std::sync::{Mutex, Arc};
-#[cfg(feature = "lru")]
-use lru::LruCache;
 #[cfg(feature = "lru")]
 use lazy_static::lazy_static;
 #[cfg(feature = "lru")]
+use lru::LruCache;
+#[cfg(feature = "lru")]
+use std::sync::{Arc, Mutex};
+#[cfg(feature = "lru")]
 lazy_static! {
-    static ref CACHE: Arc<Mutex<LruCache<NamedGroup, (KexPublicKey,KexPrivateKey)>>> = Arc::new(Mutex::new(LruCache::unbounded()));
+    static ref CACHE: Arc<Mutex<LruCache<NamedGroup, (KexPublicKey, KexPrivateKey)>>> =
+        Arc::new(Mutex::new(LruCache::unbounded()));
 }
-
 
 impl KeyExchange {
     pub fn named_group_to_ecdh_alg(group: NamedGroup) -> Option<KexAlgorithm> {
@@ -173,6 +187,21 @@ impl KeyExchange {
             NamedGroup::X25519 => Some(KexAlgorithm::RingAlg(&ring::agreement::X25519)),
             NamedGroup::secp256r1 => Some(KexAlgorithm::RingAlg(&ring::agreement::ECDH_P256)),
             NamedGroup::secp384r1 => Some(KexAlgorithm::RingAlg(&ring::agreement::ECDH_P384)),
+            NamedGroup::secp256r1MLKEM768 => {
+                oqs::init();
+                let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::MlKem768).unwrap();
+                Some(KexAlgorithm::Hybrid(&ring::agreement::ECDH_P256, kem))
+            }
+            NamedGroup::X25519MLKEM768 => {
+                oqs::init();
+                let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::MlKem768).unwrap();
+                Some(KexAlgorithm::Hybrid(&ring::agreement::X25519, kem))
+            }
+            NamedGroup::secp384r1MLKEM1024 => {
+                oqs::init();
+                let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::MlKem1024).unwrap();
+                Some(KexAlgorithm::Hybrid(&ring::agreement::ECDH_P384, kem))
+            }
             group => include!("generated/named_group_to_kex.rs"),
         }
     }
@@ -198,45 +227,56 @@ impl KeyExchange {
 
     #[allow(unused_variables)]
     fn generate_key(group: NamedGroup, alg: &KexAlgorithm) -> (KexPublicKey, KexPrivateKey) {
-            #[cfg(feature = "lru")] {
-                let mutex = Arc::clone(&CACHE);
-                let mut cache = mutex.lock().unwrap();
-                if let Some(result) = cache.peek(&group) {
-                    return result.clone();
+        #[cfg(feature = "lru")]
+        {
+            let mutex = Arc::clone(&CACHE);
+            let mut cache = mutex.lock().unwrap();
+            if let Some(result) = cache.peek(&group) {
+                return result.clone();
+            }
+        }
+
+        let result = match alg {
+            KexAlgorithm::KEM(kem) => {
+                let (pk, sk) = kem.keypair().unwrap();
+                (KexPublicKey::KEM(pk), KexPrivateKey::KEM(sk))
+            }
+            KexAlgorithm::Hybrid(ecdh, kem) => {
+                let rng = ring::rand::SystemRandom::new();
+                let ours = ring::agreement::EphemeralPrivateKey::generate(*ecdh, &rng).unwrap();
+
+                let ecdhpubkey = ours.compute_public_key().unwrap();
+                let (kempk, kemsk) = kem.keypair().unwrap();
+                let mut pubkeyvec = ecdhpubkey.as_ref().to_vec();
+                pubkeyvec.extend_from_slice(kempk.as_ref());
+                (
+                    KexPublicKey::Hybrid(pubkeyvec),
+                    KexPrivateKey::Hybrid(Some(ours), kemsk),
+                )
+            }
+            KexAlgorithm::CSIDH(alg) => match alg {
+                NikeImpl::SecSidh(alg) => {
+                    let (pk, sk) = secsidh::keygen(*alg).unwrap();
+                    (KexPublicKey::SECSIDH(pk), KexPrivateKey::SECSIDH(sk))
                 }
-            }
-
-            let result = match alg {
-                KexAlgorithm::KEM(kem) => {
-                    let (pk, sk) = kem.keypair().unwrap();
-                    (KexPublicKey::KEM(pk), KexPrivateKey::KEM(sk))
-                },
-                KexAlgorithm::CSIDH(alg) => {
-                    match alg {
-                        NikeImpl::SecSidh(alg) => {
-                            let (pk, sk) = secsidh::keygen(*alg).unwrap();
-                            (KexPublicKey::SECSIDH(pk), KexPrivateKey::SECSIDH(sk))
-                        },
-                        NikeImpl::CTIDH512 => {
-                            let (pk, sk) = csidh_rust::ctidh512::keypair();
-                            (KexPublicKey::CTIDH512(pk), KexPrivateKey::CTIDH512(sk))
-                        },
-                        NikeImpl::CTIDH1024 => {
-                            let (pk, sk) = csidh_rust::ctidh1024::keypair();
-                            (KexPublicKey::CTIDH1024(pk), KexPrivateKey::CTIDH1024(sk))
-                        },
-                    }
-
-                },
-                _ => unreachable!("Should already be covered")
-            };
-            #[cfg(feature="lru")]
-            {
-                let mutex = Arc::clone(&CACHE);
-                let mut cache = mutex.lock().unwrap();
-                cache.put(group, result.clone());
-            }
-            result
+                NikeImpl::CTIDH512 => {
+                    let (pk, sk) = csidh_rust::ctidh512::keypair();
+                    (KexPublicKey::CTIDH512(pk), KexPrivateKey::CTIDH512(sk))
+                }
+                NikeImpl::CTIDH1024 => {
+                    let (pk, sk) = csidh_rust::ctidh1024::keypair();
+                    (KexPublicKey::CTIDH1024(pk), KexPrivateKey::CTIDH1024(sk))
+                }
+            },
+            _ => unreachable!("Should already be covered"),
+        };
+        #[cfg(feature = "lru")]
+        {
+            let mutex = Arc::clone(&CACHE);
+            let mut cache = mutex.lock().unwrap();
+            cache.put(group, result.clone());
+        }
+        result
     }
 
     // Generate's the public key keyshare
@@ -252,7 +292,7 @@ impl KeyExchange {
                     privkey,
                     pubkey,
                 })
-            },
+            }
         }
     }
 
@@ -268,12 +308,31 @@ impl KeyExchange {
                     ciphertext,
                     shared_secret,
                 })
-            },
+            }
             KexAlgorithm::KEM(kem) => {
                 let pk = kem.public_key_from_bytes(peer)?;
                 let (ciphertext, shared_secret) = kem.encapsulate(pk).ok()?;
-                Some(KeyExchangeResult {ciphertext: ciphertext.into_vec(), shared_secret: shared_secret.into_vec()})
-            },
+                Some(KeyExchangeResult {
+                    ciphertext: ciphertext.into_vec(),
+                    shared_secret: shared_secret.into_vec(),
+                })
+            }
+            KexAlgorithm::Hybrid(alg, kem) => {
+                let mut kex = Self::start_ecdhe(named_group, alg)?;
+                let ecdh_ciphertext = kex.pubkey.as_ref().to_vec();
+                let len = kex.pubkey.as_ref().len();
+                let ecdh_shared_secret = kex.decapsulate(peer[..len].as_ref())?;
+                let pk = kem.public_key_from_bytes(peer[len..].as_ref())?;
+                let (kem_ciphertext, kem_shared_secret) = kem.encapsulate(pk).ok()?;
+                let mut ciphertext = ecdh_ciphertext;
+                ciphertext.append(&mut kem_ciphertext.into_vec());
+                let mut shared_secret = ecdh_shared_secret;
+                shared_secret.append(&mut kem_shared_secret.into_vec());
+                Some(KeyExchangeResult {
+                    ciphertext,
+                    shared_secret,
+                })
+            }
             KexAlgorithm::CSIDH(csidhalg) => {
                 // our public key is the ciphertext if we phrase a NIKE as a KEM
                 let (pubkey, privkey) = KeyExchange::generate_key(named_group, &alg);
@@ -287,7 +346,7 @@ impl KeyExchange {
                         let pk_b = csidh_rust::ctidh512::CSIDHPublicKey::from_bytes(peer);
                         let shared_secret = csidh_rust::ctidh512::agreement(&pk_b, &sk);
                         (ciphertext, shared_secret.to_vec())
-                    },
+                    }
                     NikeImpl::CTIDH1024 => {
                         let sk = match privkey {
                             KexPrivateKey::CTIDH1024(sk) => sk,
@@ -297,20 +356,21 @@ impl KeyExchange {
                         let pk_b = csidh_rust::ctidh1024::CSIDHPublicKey::from_bytes(peer);
                         let shared_secret = csidh_rust::ctidh1024::agreement(&pk_b, &sk);
                         (ciphertext, shared_secret.to_vec())
-                    },
-                    NikeImpl::SecSidh(secsidhalg) =>{
+                    }
+                    NikeImpl::SecSidh(secsidhalg) => {
                         let sk = privkey.as_secsidh_key();
                         let ciphertext = pubkey.as_ref().to_vec();
                         let pk_b = secsidh::PublicKey::from_bytes(secsidhalg, peer)?;
                         let shared_secret = secsidh::derive(&pk_b, &sk)?;
                         (ciphertext, shared_secret)
-                    },
+                    }
                 };
 
                 Some(KeyExchangeResult {
-                    ciphertext, shared_secret
+                    ciphertext,
+                    shared_secret,
                 })
-            },
+            }
         }
     }
 
@@ -332,7 +392,8 @@ impl KeyExchange {
     }
 
     pub fn check_client_params(&self, kx_params: &[u8]) -> bool {
-        self.decode_client_params(kx_params).is_some()
+        self.decode_client_params(kx_params)
+            .is_some()
     }
 
     fn decode_client_params(&self, kx_params: &[u8]) -> Option<ClientECDHParams> {
@@ -349,7 +410,10 @@ impl KeyExchange {
         let mut rd = Reader::init(kx_params);
         let server_params = ServerECDHParams::read(&mut rd).unwrap();
 
-        Self::encapsulate(server_params.curve_params.named_group, &server_params.public.0)
+        Self::encapsulate(
+            server_params.curve_params.named_group,
+            &server_params.public.0,
+        )
     }
 
     pub fn server_decapsulate(mut self, kx_params: &[u8]) -> Option<Vec<u8>> {
@@ -362,8 +426,7 @@ impl KeyExchange {
             KexAlgorithm::RingAlg(alg) => {
                 let peer_key = ring::agreement::UnparsedPublicKey::new(alg, peer);
                 let secret = ring::agreement::agree_ephemeral(
-                    self.privkey
-                        .take_ring_key(),
+                    self.privkey.take_ring_key(),
                     &peer_key,
                     (),
                     |v| {
@@ -381,35 +444,67 @@ impl KeyExchange {
             }
             KexAlgorithm::KEM(kem) => {
                 let sk = self.privkey.as_kem_key();
-                let ct = kem.ciphertext_from_bytes(peer)?;
+                let ct = kem.ciphertext_from_bytes(&peer)?;
                 Some(kem.decapsulate(sk, ct).ok()?.into_vec())
-            },
-            KexAlgorithm::CSIDH(alg) => {
-                match alg {
-                    NikeImpl::CTIDH512 => {
-                        let sk = match self.privkey {
-                            KexPrivateKey::CTIDH512(sk) => sk,
-                            _ => unreachable!(),
-                        };
-                        let pk_b = csidh_rust::ctidh512::CSIDHPublicKey::from_bytes(peer);
-                        Some(csidh_rust::ctidh512::agreement(&pk_b, &sk).to_vec())
+            }
+            KexAlgorithm::Hybrid(alg, kem) => {
+                let hybrid_len = if *alg == &ring::agreement::X25519 {
+                    32
+                } else if *alg == &ring::agreement::ECDH_P256 {
+                    64
+                } else if *alg == &ring::agreement::ECDH_P384 {
+                    96
+                } else {
+                    unreachable!()
+                };
+
+                let peer_key = ring::agreement::UnparsedPublicKey::new(alg, &peer[..hybrid_len]);
+                let ct = kem.ciphertext_from_bytes(&peer[hybrid_len..])?;
+                let secret = ring::agreement::agree_ephemeral(
+                    self.privkey.take_ring_key(),
+                    &peer_key,
+                    (),
+                    |v| {
+                        let sk = self.privkey.as_kem_key();
+                        let kemss = kem
+                            .decapsulate(sk, ct)
+                            .unwrap();
+                        let mut r = Vec::with_capacity(v.len() + kemss.len());
+                        r.extend_from_slice(v);
+                        r.extend_from_slice(kemss.as_ref());
+                        Ok(r)
                     },
-                    NikeImpl::CTIDH1024 => {
-                        let sk = match self.privkey {
-                            KexPrivateKey::CTIDH1024(sk) => sk,
-                            _ => unreachable!(),
-                        };
-                        let pk_b = csidh_rust::ctidh1024::CSIDHPublicKey::from_bytes(peer);
-                        Some(csidh_rust::ctidh1024::agreement(&pk_b, &sk).to_vec())
-                    },
-                    NikeImpl::SecSidh(alg) => {
-                        let sk = self.privkey.as_secsidh_key();
-                        let pk_b = secsidh::PublicKey::from_bytes(*alg, peer)?;
-                        secsidh::derive(&pk_b, &sk)
-                    },
+                );
+
+                if secret.is_err() {
+                    return None;
                 }
 
+                Some(secret.unwrap())
             }
+            KexAlgorithm::CSIDH(alg) => match alg {
+                NikeImpl::CTIDH512 => {
+                    let sk = match self.privkey {
+                        KexPrivateKey::CTIDH512(sk) => sk,
+                        _ => unreachable!(),
+                    };
+                    let pk_b = csidh_rust::ctidh512::CSIDHPublicKey::from_bytes(peer);
+                    Some(csidh_rust::ctidh512::agreement(&pk_b, &sk).to_vec())
+                }
+                NikeImpl::CTIDH1024 => {
+                    let sk = match self.privkey {
+                        KexPrivateKey::CTIDH1024(sk) => sk,
+                        _ => unreachable!(),
+                    };
+                    let pk_b = csidh_rust::ctidh1024::CSIDHPublicKey::from_bytes(peer);
+                    Some(csidh_rust::ctidh1024::agreement(&pk_b, &sk).to_vec())
+                }
+                NikeImpl::SecSidh(alg) => {
+                    let sk = self.privkey.as_secsidh_key();
+                    let pk_b = secsidh::PublicKey::from_bytes(*alg, peer)?;
+                    secsidh::derive(&pk_b, &sk)
+                }
+            },
         }
     }
 }
@@ -482,7 +577,9 @@ impl fmt::Debug for SupportedCipherSuite {
 impl SupportedCipherSuite {
     /// Which hash function to use with this suite.
     pub fn get_hash(&self) -> &'static ring::digest::Algorithm {
-        self.hkdf_algorithm.hmac_algorithm().digest_algorithm()
+        self.hkdf_algorithm
+            .hmac_algorithm()
+            .digest_algorithm()
     }
 
     /// We have parameters and a verified public key in `kx_params`.
@@ -508,11 +605,10 @@ impl SupportedCipherSuite {
     /// Resolve the set of supported `SignatureScheme`s from the
     /// offered `SupportedSignatureSchemes`.  If we return an empty
     /// set, the handshake terminates.
-    pub fn resolve_sig_schemes(&self,
-                              offered: &[SignatureScheme])
-                              -> Vec<SignatureScheme> {
+    pub fn resolve_sig_schemes(&self, offered: &[SignatureScheme]) -> Vec<SignatureScheme> {
         if let Some(our_preference) = self.sign {
-            our_preference.iter()
+            our_preference
+                .iter()
                 .filter(|pref| offered.contains(pref))
                 .cloned()
                 .collect()
@@ -541,7 +637,9 @@ impl SupportedCipherSuite {
     pub fn usable_for_sigalg(&self, sigalg: SignatureAlgorithm) -> bool {
         match self.sign {
             None => true, // no constraint expressed by ciphersuite (eg, TLS1.3)
-            Some(schemes) => schemes.iter().any(|scheme| scheme.sign() == sigalg),
+            Some(schemes) => schemes
+                .iter()
+                .any(|scheme| scheme.sign() == sigalg),
         }
     }
 
@@ -583,36 +681,38 @@ static TLS12_RSA_SCHEMES: &[SignatureScheme] = &[
 ];
 
 /// The TLS1.2 ciphersuite TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256.
-pub static TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite = SupportedCipherSuite {
-    suite: CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-    kx: KeyExchangeAlgorithm::ECDHE,
-    sign: Some(TLS12_ECDSA_SCHEMES),
-    bulk: BulkAlgorithm::CHACHA20_POLY1305,
-    hash: HashAlgorithm::SHA256,
-    enc_key_len: 32,
-    fixed_iv_len: 12,
-    explicit_nonce_len: 0,
-    hkdf_algorithm: ring::hkdf::HKDF_SHA256,
-    aead_algorithm: &ring::aead::CHACHA20_POLY1305,
-    build_tls12_encrypter: Some(cipher::build_tls12_chacha_encrypter),
-    build_tls12_decrypter: Some(cipher::build_tls12_chacha_decrypter),
-};
+pub static TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
+    SupportedCipherSuite {
+        suite: CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+        kx: KeyExchangeAlgorithm::ECDHE,
+        sign: Some(TLS12_ECDSA_SCHEMES),
+        bulk: BulkAlgorithm::CHACHA20_POLY1305,
+        hash: HashAlgorithm::SHA256,
+        enc_key_len: 32,
+        fixed_iv_len: 12,
+        explicit_nonce_len: 0,
+        hkdf_algorithm: ring::hkdf::HKDF_SHA256,
+        aead_algorithm: &ring::aead::CHACHA20_POLY1305,
+        build_tls12_encrypter: Some(cipher::build_tls12_chacha_encrypter),
+        build_tls12_decrypter: Some(cipher::build_tls12_chacha_decrypter),
+    };
 
 /// The TLS1.2 ciphersuite TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite = SupportedCipherSuite {
-    suite: CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-    kx: KeyExchangeAlgorithm::ECDHE,
-    sign: Some(TLS12_RSA_SCHEMES),
-    bulk: BulkAlgorithm::CHACHA20_POLY1305,
-    hash: HashAlgorithm::SHA256,
-    enc_key_len: 32,
-    fixed_iv_len: 12,
-    explicit_nonce_len: 0,
-    hkdf_algorithm: ring::hkdf::HKDF_SHA256,
-    aead_algorithm: &ring::aead::CHACHA20_POLY1305,
-    build_tls12_encrypter: Some(cipher::build_tls12_chacha_encrypter),
-    build_tls12_decrypter: Some(cipher::build_tls12_chacha_decrypter),
-};
+pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
+    SupportedCipherSuite {
+        suite: CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+        kx: KeyExchangeAlgorithm::ECDHE,
+        sign: Some(TLS12_RSA_SCHEMES),
+        bulk: BulkAlgorithm::CHACHA20_POLY1305,
+        hash: HashAlgorithm::SHA256,
+        enc_key_len: 32,
+        fixed_iv_len: 12,
+        explicit_nonce_len: 0,
+        hkdf_algorithm: ring::hkdf::HKDF_SHA256,
+        aead_algorithm: &ring::aead::CHACHA20_POLY1305,
+        build_tls12_encrypter: Some(cipher::build_tls12_chacha_encrypter),
+        build_tls12_decrypter: Some(cipher::build_tls12_chacha_decrypter),
+    };
 
 /// The TLS1.2 ciphersuite TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
 pub static TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: SupportedCipherSuite = SupportedCipherSuite {
@@ -747,7 +847,10 @@ pub fn choose_ciphersuite_preferring_client(
     server_suites: &[&'static SupportedCipherSuite],
 ) -> Option<&'static SupportedCipherSuite> {
     for client_suite in client_suites {
-        if let Some(selected) = server_suites.iter().find(|x| *client_suite == x.suite) {
+        if let Some(selected) = server_suites
+            .iter()
+            .find(|x| *client_suite == x.suite)
+        {
             return Some(*selected);
         }
     }
@@ -799,7 +902,8 @@ pub fn compatible_sigscheme_for_suites(
     common_suites: &[&'static SupportedCipherSuite],
 ) -> bool {
     let sigalg = sigscheme.sign();
-    common_suites.iter()
+    common_suites
+        .iter()
         .any(|&suite| suite.usable_for_sigalg(sigalg))
 }
 

@@ -1,16 +1,3 @@
 match scheme {
     SignatureScheme::NIKE_CTIDH512 => NikeImpl::CTIDH512,
-    SignatureScheme::NIKE_CTIDH1024 => NikeImpl::CTIDH1024,
-    SignatureScheme::NIKE_CSIDH2047M1L226 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH2047m1l226),
-    SignatureScheme::NIKE_CSIDH4095M27L262 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH4095m27l262),
-    SignatureScheme::NIKE_CSIDH5119M46L244 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH5119m46l244),
-    SignatureScheme::NIKE_CSIDH6143M59L262 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH6143m59l262),
-    SignatureScheme::NIKE_CSIDH8191M78L338 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH8191m78l338),
-    SignatureScheme::NIKE_CSIDH9215M85L389 => NikeImpl::SecSidh(secsidh::Algorithm::CSIDH9215m85l389),
-    SignatureScheme::NIKE_CTIDH2047M1L226 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH2047m1l226),
-    SignatureScheme::NIKE_CTIDH4095M27L262 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH4095m27l262),
-    SignatureScheme::NIKE_CTIDH5119M46L244 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH5119m46l244),
-    SignatureScheme::NIKE_CTIDH6143M59L262 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH6143m59l262),
-    SignatureScheme::NIKE_CTIDH8191M78L338 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH8191m78l338),
-    SignatureScheme::NIKE_CTIDH9215M85L389 => NikeImpl::SecSidh(secsidh::Algorithm::CTIDH9215m85l389),
     _ => unreachable!(),}
