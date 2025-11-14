@@ -2,16 +2,17 @@
 from itertools import repeat
 import textwrap
 import subprocess
-from algorithms import signs, kems, get_oid, nikes
+from algorithms import signs, kems, get_oid, nikes, hybrids
 
 
 with open('rustls/src/generated/named_group_to_kex.rs', 'w') as fh:
+    # Hybrids are already covered!
     fh.write("match group {\n")
     for alg, oqsalg in kems:
         fh.write(f"""
         NamedGroup::{oqsalg} => {{
             oqs::init();
-            let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::Kyber512).unwrap();
+            let kem = oqs::kem::Kem::new(oqs::kem::Algorithm::{oqsalg}).unwrap();
             Some(KexAlgorithm::KEM(kem))
         }},
 """)
@@ -37,6 +38,8 @@ with open('rustls/src/generated/supported_kex_groups.rs', 'w') as fh:
         fh.write(f"""NamedGroup::{oqsalg},\n""")
     for alg in nikes:
         fh.write(f"""NamedGroup::{alg.upper()},\n""")
+    for alg, name in hybrids:
+        fh.write(f"""NamedGroup::{name},\n""")
     fh.write("""    NamedGroup::X25519,
     NamedGroup::secp384r1,
     NamedGroup::secp256r1,
