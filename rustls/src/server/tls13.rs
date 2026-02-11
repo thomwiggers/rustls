@@ -703,6 +703,8 @@ impl CompleteClientHelloHandling {
         }
 
         let full_handshake = resumedata.is_none();
+        debug!("PSK DEBUG: full_handshake={}, resumedata.is_some()={}, chosen_psk_index={:?}",
+               full_handshake, resumedata.is_some(), chosen_psk_index);
         self.handshake.transcript.add_message(chm);
 
         if let Some(ref ks) = maybe_key_schedule {
@@ -763,7 +765,9 @@ impl CompleteClientHelloHandling {
         }
         self.emit_encrypted_extensions(sess, &mut server_key, client_hello, resumedata.as_ref(), doing_pdk)?;
 
+        debug!("PSK DEBUG: About to check certificate sending - full_handshake={}", full_handshake);
         let (doing_client_auth, is_kemtls) = if full_handshake {
+            debug!("PSK DEBUG: Entering full_handshake branch - WILL SEND CERTIFICATE");
             let client_auth;
             let is_kemtls = if !doing_pdk {
                 client_auth = self.emit_certificate_req_tls13(sess)?;
@@ -782,6 +786,7 @@ impl CompleteClientHelloHandling {
             }
             (client_auth, is_kemtls)
         } else {
+            debug!("PSK DEBUG: Entering PSK resumption branch - SKIPPING CERTIFICATE");
             (false, false)
         };
 
