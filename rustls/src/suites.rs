@@ -448,16 +448,7 @@ impl KeyExchange {
                 Some(kem.decapsulate(sk, ct).ok()?.into_vec())
             }
             KexAlgorithm::Hybrid(alg, kem) => {
-                let hybrid_len = if *alg == &ring::agreement::X25519 {
-                    32
-                } else if *alg == &ring::agreement::ECDH_P256 {
-                    64
-                } else if *alg == &ring::agreement::ECDH_P384 {
-                    96
-                } else {
-                    unreachable!()
-                };
-
+                let hybrid_len = peer.len() - kem.length_ciphertext();
                 let peer_key = ring::agreement::UnparsedPublicKey::new(alg, &peer[..hybrid_len]);
                 let ct = kem.ciphertext_from_bytes(&peer[hybrid_len..])?;
                 let secret = ring::agreement::agree_ephemeral(
