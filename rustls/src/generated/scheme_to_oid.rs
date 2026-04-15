@@ -1,5 +1,7 @@
 match scheme {
-    SignatureScheme::DILITHIUM2 => include_bytes!("data/alg-dilithium2.der"),
+    SignatureScheme::MLDSA44 => include_bytes!("data/alg-mldsa44.der"),
+    SignatureScheme::MLDSA65 => include_bytes!("data/alg-mldsa65.der"),
+    SignatureScheme::MLDSA87 => include_bytes!("data/alg-mldsa87.der"),
     SignatureScheme::XMSS1 => include_bytes!("data/alg-xmss1.der"),
     SignatureScheme::XMSS3 => include_bytes!("data/alg-xmss3.der"),
     SignatureScheme::XMSS5 => include_bytes!("data/alg-xmss5.der"),

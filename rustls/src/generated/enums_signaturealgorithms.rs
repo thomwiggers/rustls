@@ -14,9 +14,11 @@ enum_builder! {
         ED448 => 0x08,
         KEMTLS => 0x0f,
         NIKE => 0x10,
-        DILITHIUM2 => 0x11,
-        XMSS1 => 0x12,
-        XMSS3 => 0x13,
-        XMSS5 => 0x14,
+        MLDSA44 => 0x11,
+        MLDSA65 => 0x12,
+        MLDSA87 => 0x13,
+        XMSS1 => 0x14,
+        XMSS3 => 0x15,
+        XMSS5 => 0x16,
     }
 }
